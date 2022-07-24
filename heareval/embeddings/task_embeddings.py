@@ -40,6 +40,15 @@ from intervaltree import IntervalTree
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
+from miniaudio import (
+    mp3_stream_file, 
+    stream_file,
+    convert_sample_format,
+    SampleFormat,
+    ffi, lib,
+    _get_filename_bytes, _create_int_array, DecodeError
+)
+
 # import wandb
 import heareval.gpu_max_mem as gpu_max_mem
 
@@ -191,10 +200,68 @@ class AudioFileDataset(Dataset):
         # 1 then the torch dataloader can take advantage of multiprocessing.
         audio_path = self.audio_dir.joinpath(self.filenames[idx])
         # audio, sr = sf.read(str(audio_path), dtype=np.float32)
-        audio, sr = torchaudio.load(str(audio_path))
-        audio = audio[0].numpy()
+        if audio_path.suffix == '.mp3':
+            audio, sr = self.read_mp3_file(str(audio_path))
+            audio = audio[0]
+        else:
+            audio, sr = torchaudio.load(str(audio_path))
+            audio = audio[0].numpy()
         assert sr == self.sample_rate
         return audio, self.filenames[idx]
+
+    def read_mp3_file(self, filename, seek_frame: int = 0, frames_to_read: int = -1):
+        samples = None
+        filenamebytes = _get_filename_bytes(filename)
+        sample_rate, nchannels = None, None
+
+        def _read_from_buffer(_mp3, _frames_to_read, _buf_ptr, _decodebuffer):
+            num_samples = lib.drmp3_read_pcm_frames_s16(_mp3, _frames_to_read, _buf_ptr)
+            if num_samples <= 0:
+                return None
+            buffer = ffi.buffer(_decodebuffer, num_samples * 2 * _mp3.channels)
+            samples = _create_int_array(2)
+            samples.frombytes(buffer)
+            return samples
+
+        whole_file = frames_to_read is None or frames_to_read < 1
+        if whole_file:
+            frames_to_read = 1024
+
+        with ffi.new("drmp3 *") as mp3:
+            if not lib.drmp3_init_file(mp3, filenamebytes, ffi.NULL):
+                raise DecodeError("could not open/decode file")
+
+            sample_rate, nchannels = mp3.sampleRate, mp3.channels
+            if seek_frame > 0:
+                result = lib.drmp3_seek_to_pcm_frame(mp3, seek_frame)
+                if result <= 0:
+                    raise DecodeError("can't seek")
+            try:
+                with ffi.new("drmp3_int16[]", frames_to_read * mp3.channels) as decodebuffer:
+                    buf_ptr = ffi.cast("drmp3_int16 *", decodebuffer)
+                    if not whole_file:
+                        samples = _read_from_buffer(mp3, frames_to_read, buf_ptr, decodebuffer)
+                    else:
+                        while True:
+                            tmp = _read_from_buffer(mp3, frames_to_read, buf_ptr, decodebuffer)
+                            if tmp is not None:
+                                if samples is None:
+                                    samples = tmp
+                                else:
+                                    samples.extend(tmp)
+                            else:
+                                break
+            finally:
+                lib.drmp3_uninit(mp3)
+
+        samples = convert_sample_format(
+            SampleFormat.SIGNED16, bytes(samples), SampleFormat.FLOAT32
+        )
+        samples = np.transpose(
+            np.frombuffer(samples, dtype=np.float32).reshape((-1, nchannels))
+        )
+
+        return samples, sample_rate
 
 
 def get_dataloader_for_embedding(
@@ -258,7 +325,7 @@ def get_labels_for_timestamps(labels: List, timestamps: np.ndarray, mode='defaul
             labels_for_sound = []
             # Update the binary vector of labels with intervals for each timestamp
             last_label = None 
-            
+
             for j, t in enumerate(timestamps[i]):
                 interval_labels: List[str] = [interval.data for interval in tree[t]]
                 # assert len(interval_labels) <= 1
