@@ -23,6 +23,7 @@ wheels/
 embeddings/
 embeddings/
 logs/
+logs
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
