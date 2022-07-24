@@ -135,6 +135,28 @@ class ScoreFunction:
         return self.name
 
 
+class MultilabelAccuracy(ScoreFunction):
+    name = "multilabel_accuracy"
+
+    def _compute(self, predictions: np.ndarray, targets: np.ndarray, **kwargs) -> float:
+        assert predictions.ndim == 2
+        assert targets.ndim == 2  # One hot
+        # Compute the number of correct predictions
+        correct = 0
+        predicted_labels = np.where(predictions > 0.5, 1, 0)
+        target_labels = np.where(targets > 0.5, 1, 0)
+        correct = np.count_nonzero(predicted_labels - target_labels)
+        return correct / targets.size
+
+
+class MeanAbsoluteError(ScoreFunction):
+    name = "mean_absolute_error"
+    maximize = False
+
+    def _compute(self, predictions: np.ndarray, targets: np.ndarray, **kwargs) -> float:
+        return np.abs(targets - predictions).mean()
+
+
 class Top1Accuracy(ScoreFunction):
     name = "top1_acc"
 
@@ -367,6 +389,13 @@ available_scores: Dict[str, Callable] = {
     "pitch_acc": partial(Top1Accuracy, name="pitch_acc"),
     "chroma_acc": ChromaAccuracy,
     # https://tut-arg.github.io/sed_eval/generated/sed_eval.sound_event.EventBasedMetrics.html
+    "event_onset_3000ms_fms": partial(
+        EventBasedScore,
+        name="event_onset_3000ms_fms",
+        # If first score will be used as the primary score for this metric
+        scores=("f_measure", "precision", "recall"),
+        params={"evaluate_onset": True, "evaluate_offset": False, "t_collar": 3.0},
+    ),
     "event_onset_200ms_fms": partial(
         EventBasedScore,
         name="event_onset_200ms_fms",
@@ -379,6 +408,19 @@ available_scores: Dict[str, Callable] = {
         name="event_onset_50ms_fms",
         scores=("f_measure", "precision", "recall"),
         params={"evaluate_onset": True, "evaluate_offset": False, "t_collar": 0.05},
+    ),
+    "event_onset_70ms_fms": partial(
+        EventBasedScore,
+        name="event_onset_70ms_fms",
+        scores=("f_measure", "precision", "recall"),
+        params={"evaluate_onset": True, "evaluate_offset": False, "t_collar": 0.07},
+    ),
+    "event_onset_offset_3000ms_20perc_fms": partial(
+        EventBasedScore,
+        name="event_onset_offset_3000ms_20perc_fms",
+        # If first score will be used as the primary score for this metric
+        scores=("f_measure", "precision", "recall"),
+        params={"evaluate_onset": True, "evaluate_offset": True, "t_collar": 3.0, "percentage_of_length": 0.2},
     ),
     "event_onset_offset_50ms_20perc_fms": partial(
         EventBasedScore,
@@ -401,4 +443,6 @@ available_scores: Dict[str, Callable] = {
     "mAP": MeanAveragePrecision,
     "d_prime": DPrime,
     "aucroc": AUCROC,
+    "multilabel_accuracy": MultilabelAccuracy,
+    "mean_absolute_error": MeanAbsoluteError
 }

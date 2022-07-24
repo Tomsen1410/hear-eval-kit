@@ -18,38 +18,38 @@ from tqdm import tqdm
 import heareval.gpu_max_mem as gpu_max_mem
 from heareval.embeddings.task_embeddings import Embedding, task_embeddings
 
-if torch.cuda.is_available() and not tf.test.is_gpu_available(
-    cuda_only=False, min_cuda_compute_capability=None
-):
-    raise ValueError("GPUs not available in tensorflow, but found by pytorch")
+# if torch.cuda.is_available() and not tf.test.is_gpu_available(
+#     cuda_only=False, min_cuda_compute_capability=None
+# ):
+#     raise ValueError("GPUs not available in tensorflow, but found by pytorch")
 
 
-@click.command()
-@click.argument("module", type=str)
-@click.option(
-    "--model",
-    default=None,
-    help="Location of model weights file",
-    type=click.Path(exists=True),
-)
-@click.option(
-    "--tasks-dir",
-    default="tasks",
-    help="Location of tasks to compute embeddings on",
-    type=str,
-)
-@click.option(
-    "--task",
-    default="all",
-    help="Task to run. (Default: all)",
-    type=str,
-)
-@click.option(
-    "--embeddings-dir", default="embeddings", help="Location to save task embeddings"
-)
-@click.option(
-    "--model-options", default="{}", help="A JSON dict of kwargs to pass to load_model"
-)
+# @click.command()
+# @click.argument("module", type=str)
+# @click.option(
+#     "--model",
+#     default=None,
+#     help="Location of model weights file",
+#     type=click.Path(exists=True),
+# )
+# @click.option(
+#     "--tasks-dir",
+#     default="tasks",
+#     help="Location of tasks to compute embeddings on",
+#     type=str,
+# )
+# @click.option(
+#     "--task",
+#     default="all",
+#     help="Task to run. (Default: all)",
+#     type=str,
+# )
+# @click.option(
+#     "--embeddings-dir", default="embeddings", help="Location to save task embeddings"
+# )
+# @click.option(
+#     "--model-options", default="{}", help="A JSON dict of kwargs to pass to load_model"
+# )
 def runner(
     module: str,
     model: str = None,
@@ -134,4 +134,11 @@ def runner(
 
 
 if __name__ == "__main__":
-    runner()
+    # runner()
+    runner(
+        "hear_mae.mel80__4x16__768_12_384_4",
+        tasks_dir = '/home/tommi/datasets/hear/tasks/',
+        task = 'salami-function-10',
+        model = '/home/',
+        model_options = '{"audio_sr":22050}'
+    )

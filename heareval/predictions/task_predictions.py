@@ -49,6 +49,12 @@ from heareval.score import (
     validate_score_return_type,
 )
 
+
+# TOMSEN WAS HERE
+import os
+os.environ["CUBLAS_WORKSPACE_CONFIG"]=":4096:8"
+print("hey von tomsen")
+
 TASK_SPECIFIC_PARAM_GRID = {
     "dcase2016_task2": {
         # sed_eval is very slow
@@ -126,9 +132,13 @@ NUM_WORKERS = int(multiprocessing.cpu_count() / (max(1, torch.cuda.device_count(
 
 
 class OneHotToCrossEntropyLoss(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, class_weights=None):
         super().__init__()
-        self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = torch.nn.CrossEntropyLoss(reduction='none')
+        self.cw: torch.Tensor = class_weights
+        if self.cw is not None:
+            if len(self.cw.shape) == 1:
+                self.cw = self.cw.unsqueeze(0)
 
     def forward(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         # One and only one label per class
@@ -136,11 +146,38 @@ class OneHotToCrossEntropyLoss(pl.LightningModule):
             torch.sum(y, dim=1) == torch.ones(y.shape[0], device=self.device)
         )
         y = y.argmax(dim=1)
-        return self.loss(y_hat, y)
+        loss = self.loss(y_hat, y)
+        
+        # apply optional weights per class and mean
+        if self.cw is not None:
+            loss[y == 1] *= self.cw.expand(loss.shape[0], -1)[y == 1].to(loss.device)
+        
+        # mean and return
+        return loss.mean()
+
+class BCEWithLogitsAndWeights(torch.nn.Module):
+    def __init__(self, label_weights=None) -> None:
+        super().__init__()
+        self.loss = torch.nn.BCEWithLogitsLoss(reduction='none')
+        self.lw: torch.Tensor = label_weights
+        if self.lw is not None:
+            if len(self.lw.shape) == 1:
+                self.lw = self.lw.unsqueeze(0)
+
+    def forward(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        loss = self.loss(y_hat, y)
+
+        # apply optional weights per class and mean
+        if self.lw is not None:
+            loss[y == 1] *= self.lw.expand(loss.shape[0], -1)[y == 1].to(loss.device)
+        
+        # mean and return
+        return loss.mean()
+
 
 
 class FullyConnectedPrediction(torch.nn.Module):
-    def __init__(self, nfeatures: int, nlabels: int, prediction_type: str, conf: Dict):
+    def __init__(self, nfeatures: int, nlabels: int, prediction_type: str, conf: Dict, loss_weights=None):
         super().__init__()
 
         hidden_modules: List[torch.nn.Module] = []
@@ -176,10 +213,13 @@ class FullyConnectedPrediction(torch.nn.Module):
         self.logit_loss: torch.nn.Module
         if prediction_type == "multilabel":
             self.activation: torch.nn.Module = torch.nn.Sigmoid()
-            self.logit_loss = torch.nn.BCEWithLogitsLoss()
+            self.logit_loss = BCEWithLogitsAndWeights(loss_weights)
         elif prediction_type == "multiclass":
             self.activation = torch.nn.Softmax()
-            self.logit_loss = OneHotToCrossEntropyLoss()
+            self.logit_loss = OneHotToCrossEntropyLoss(loss_weights)
+        elif prediction_type == "regression":
+            self.activation = torch.nn.Identity() # no activation
+            self.logit_loss = torch.nn.MSELoss(reduction='mean')
         else:
             raise ValueError(f"Unknown prediction_type {prediction_type}")
 
@@ -204,6 +244,7 @@ class AbstractPredictionModel(pl.LightningModule):
         scores: List[ScoreFunction],
         conf: Dict,
         use_scoring_for_early_stopping: bool = True,
+        label_loss_weights = None
     ):
         super().__init__()
 
@@ -213,13 +254,14 @@ class AbstractPredictionModel(pl.LightningModule):
         # Since we don't know how these embeddings are scaled
         self.layernorm = conf["embedding_norm"](nfeatures)
         self.predictor = FullyConnectedPrediction(
-            nfeatures, nlabels, prediction_type, conf
+            nfeatures, nlabels, prediction_type, conf, label_loss_weights
         )
         torchinfo.summary(self.predictor, input_size=(64, nfeatures))
-        self.label_to_idx = label_to_idx
-        self.idx_to_label: Dict[int, str] = {
-            idx: label for (label, idx) in self.label_to_idx.items()
-        }
+        if label_to_idx is not None:
+            self.label_to_idx = label_to_idx
+            self.idx_to_label: Dict[int, str] = {
+                idx: label for (label, idx) in self.label_to_idx.items()
+            }
         self.scores = scores
 
     def forward(self, x):
@@ -233,6 +275,7 @@ class AbstractPredictionModel(pl.LightningModule):
         x, y, _ = batch
         y_hat = self.predictor.forward_logit(x)
         loss = self.predictor.logit_loss(y_hat, y)
+
         # Logging to TensorBoard by default
         self.log("train_loss", loss)
         return loss
@@ -343,6 +386,7 @@ class ScenePredictionModel(AbstractPredictionModel):
         scores: List[ScoreFunction],
         conf: Dict,
         use_scoring_for_early_stopping: bool = True,
+        label_loss_weights = None
     ):
         super().__init__(
             nfeatures=nfeatures,
@@ -352,6 +396,7 @@ class ScenePredictionModel(AbstractPredictionModel):
             scores=scores,
             conf=conf,
             use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
         )
 
     def _score_epoch_end(self, name: str, outputs: List[Dict[str, List[Any]]]):
@@ -406,6 +451,7 @@ class EventPredictionModel(AbstractPredictionModel):
         postprocessing_grid: Dict[str, List[float]],
         conf: Dict,
         use_scoring_for_early_stopping: bool = True,
+        label_loss_weights = None
     ):
         super().__init__(
             nfeatures=nfeatures,
@@ -415,6 +461,7 @@ class EventPredictionModel(AbstractPredictionModel):
             scores=scores,
             conf=conf,
             use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
         )
         self.target_events = {
             "val": validation_target_events,
@@ -532,6 +579,78 @@ class EventPredictionModel(AbstractPredictionModel):
             )
 
 
+class TimeRegressionModel(AbstractPredictionModel):
+    """
+    Regression model with simple scoring over per-embedding values
+    """
+
+    def __init__(
+        self,
+        nfeatures: int,
+        out_dim: int,
+        prediction_type: str,
+        scores: List[ScoreFunction],
+        conf: Dict,
+        use_scoring_for_early_stopping: bool = True,
+        label_loss_weights = None
+    ):
+        super().__init__(
+            nfeatures=nfeatures,
+            label_to_idx=None,
+            nlabels=out_dim,
+            prediction_type=prediction_type,
+            scores=scores,
+            conf=conf,
+            use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
+        )
+
+    def _score_epoch_end(self, name: str, outputs: List[Dict[str, List[Any]]]):
+        flat_outputs = self._flatten_batched_outputs(
+            outputs,
+            keys=["target", "prediction", "prediction_logit", "filename", "timestamp"],
+            # This is a list of string, not tensor, so we don't need to stack it
+            dont_stack=["filename"],
+        )
+        target, prediction, prediction_logit, filename, timestamp = (
+            flat_outputs[key]
+            for key in [
+                "target",
+                "prediction",
+                "prediction_logit",
+                "filename",
+                "timestamp",
+            ]
+        )
+
+        self.log(
+            f"{name}_loss",
+            self.predictor.logit_loss(prediction_logit, target),
+            prog_bar=True,
+            logger=True,
+        )
+
+
+        if name == "test":
+            # Cache all predictions for later serialization
+            self.test_predictions = {
+                "target": target.detach().cpu(),
+                "prediction": prediction.detach().cpu(),
+                "prediction_logit": prediction_logit.detach().cpu(),
+                "timestamp": timestamp,
+            }
+
+        if name == "test" or self.use_scoring_for_early_stopping:
+            self.log_scores(
+                name,
+                score_args=(
+                    prediction.detach().cpu().numpy(),
+                    target.detach().cpu().numpy(),
+                    # timestamp # TODO
+                ),
+            )
+
+
 class SplitMemmapDataset(Dataset):
     """
     Embeddings are memmap'ed, unless in-memory = True.
@@ -579,7 +698,7 @@ class SplitMemmapDataset(Dataset):
         # Only used for event-based prediction, for validation and test scoring,
         # For timestamp (event) embedding tasks,
         # the metadata for each instance is {filename: , timestamp: }.
-        if self.embedding_type == "event" and metadata:
+        if (self.embedding_type == "event" or self.embedding_type == 'continuous') and metadata:
             filename_timestamps_json = embedding_path.joinpath(
                 f"{split_name}.filename-timestamps.json"
             )
@@ -594,17 +713,24 @@ class SplitMemmapDataset(Dataset):
         assert len(self.labels) == len(self.metadata)
         assert self.embeddings[0].shape[0] == self.dim[1]
 
-        """
-        For all labels, return a multi or one-hot vector.
-        This allows us to have tensors that are all the same shape.
-        Later we reduce this with an argmax to get the vocabulary indices.
-        """
-        ys = []
-        for idx in tqdm(range(len(self.labels))):
-            labels = [self.label_to_idx[str(label)] for label in self.labels[idx]]
-            y = label_to_binary_vector(labels, self.nlabels)
-            ys.append(y)
-        self.y = torch.stack(ys)
+
+        if self.embedding_type != 'continuous':
+            """
+            For all labels, return a multi or one-hot vector.
+            This allows us to have tensors that are all the same shape.
+            Later we reduce this with an argmax to get the vocabulary indices.
+            """
+            ys = []
+            for idx in tqdm(range(len(self.labels))):
+                labels = [self.label_to_idx[str(label)] for label in self.labels[idx]]
+                y = label_to_binary_vector(labels, self.nlabels)
+                ys.append(y)
+            self.y = torch.stack(ys)
+
+        # In case of regression or probabilities
+        else:
+            self.y = torch.tensor(self.labels)
+        
         assert self.y.shape == (len(self.labels), self.nlabels)
 
     def __len__(self) -> int:
@@ -767,11 +893,14 @@ def get_events_for_all_files(
 
 
 def label_vocab_nlabels(embedding_path: Path) -> Tuple[pd.DataFrame, int]:
-    label_vocab = pd.read_csv(embedding_path.joinpath("labelvocabulary.csv"))
-
-    nlabels = len(label_vocab)
-    assert nlabels == label_vocab["idx"].max() + 1
-    return (label_vocab, nlabels)
+    p = embedding_path.joinpath("labelvocabulary.csv")
+    if p.is_file():
+        label_vocab = pd.read_csv(embedding_path.joinpath("labelvocabulary.csv"))
+        nlabels = len(label_vocab)
+        assert nlabels == label_vocab["idx"].max() + 1
+        return (label_vocab, nlabels)
+    else:
+        return None, None
 
 
 def dataloader_from_split_name(
@@ -909,6 +1038,8 @@ def task_predictions_train(
     gpus: Any,
     in_memory: bool,
     deterministic: bool,
+    label_loss_weights = None
+    
 ) -> GridPointResult:
     """
     Train a predictor for a specific task using pre-computed embeddings.
@@ -971,6 +1102,7 @@ def task_predictions_train(
             postprocessing_grid=postprocessing_grid,
             conf=conf,
             use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
         )
     elif metadata["embedding_type"] == "scene":
         predictor = ScenePredictionModel(
@@ -981,6 +1113,17 @@ def task_predictions_train(
             scores=scores,
             conf=conf,
             use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
+        )
+    elif metadata["embedding_type"] == "continuous":
+        predictor = TimeRegressionModel(
+            nfeatures=embedding_size,
+            out_dim=nlabels,
+            prediction_type=metadata["prediction_type"],
+            scores=scores,
+            conf=conf,
+            use_scoring_for_early_stopping=use_scoring_for_early_stopping,
+            label_loss_weights=label_loss_weights
         )
     else:
         raise ValueError(f"Unknown embedding_type {metadata['embedding_type']}")
@@ -1281,6 +1424,7 @@ def task_predictions(
     deterministic: bool,
     grid: str,
     logger: logging.Logger,
+    label_loss_weights = None,
 ):
     # By setting workers=True in seed_everything(), Lightning derives
     # unique seeds across all dataloader workers and processes
@@ -1297,12 +1441,16 @@ def task_predictions(
     label_vocab, nlabels = label_vocab_nlabels(embedding_path)
 
     # wandb.init(project="heareval", tags=["predictions", embedding_path.name])
-
-    label_to_idx = label_vocab_as_dict(label_vocab, key="label", value="idx")
-    scores = [
-        available_scores[score](label_to_idx=label_to_idx)
-        for score in metadata["evaluation"]
-    ]
+    if label_vocab is not None:
+        label_to_idx = label_vocab_as_dict(label_vocab, key="label", value="idx")
+        scores = [
+            available_scores[score](label_to_idx=label_to_idx)
+            for score in metadata["evaluation"]
+        ]
+    else:
+        scores = []
+        label_to_idx = None
+        nlabels = metadata['out_dim']
 
     use_scoring_for_early_stopping = metadata.get(
         "use_scoring_for_early_stopping", True
@@ -1334,6 +1482,18 @@ def task_predictions(
     # TASK_SPECIFIC_PARAM_GRID. Ideally one out of the two option should be
     # there
     if "task_specific_param_grid" in metadata.get("evaluation_params", {}):
+        # hack because authors are incompetent
+        tspg = metadata["evaluation_params"]["task_specific_param_grid"]
+        for k in tspg.keys():
+            if k == 'initialization':
+                new_vals = []
+                for v in tspg[k]:
+                    if v == 'uniform':
+                        new_vals.append(torch.nn.init.xavier_uniform_)
+                    elif v == 'normal':
+                        new_vals.append(torch.nn.init.xavier_normal_)
+                tspg[k] = new_vals
+        
         final_grid.update(metadata["evaluation_params"]["task_specific_param_grid"])
 
     # Model selection
@@ -1356,6 +1516,7 @@ def task_predictions(
             gpus=gpus,
             in_memory=in_memory,
             deterministic=deterministic,
+            label_loss_weights=label_loss_weights
         )
         logger.info(f" result: {grid_point_result}")
         grid_point_results.append(grid_point_result)
@@ -1390,6 +1551,7 @@ def task_predictions(
             gpus=gpus,
             in_memory=in_memory,
             deterministic=deterministic,
+            label_loss_weights=label_loss_weights
         )
         split_grid_points.append(grid_point_result)
         logger.info(
@@ -1424,6 +1586,12 @@ def task_predictions(
                 "time_in_min": split_grid_points[i].time_in_min,
             }
         )
+
+        # TOMSEN WAS HERE
+        # Save predictor state_dict
+        # TODO: probably all state dicts are the same?
+        predictor_sd_file = embedding_path.joinpath(f"{test_fold_str}.predictor_checkpoint.pth")
+        torch.save(split_grid_points[i].predictor.state_dict(), predictor_sd_file)
 
     # Make sure we have a test score for each fold
     assert len(test_results) == len(data_splits)

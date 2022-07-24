@@ -21,6 +21,7 @@ TODO:
     have this work both for pytorch and tensorflow.
     https://github.com/hearbenchmark/hear2021-eval-kit/issues/49
 """
+from collections import defaultdict
 import json
 import os.path
 import pickle
@@ -32,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
+import torchaudio
 import tensorflow as tf
 import torch
 from intervaltree import IntervalTree
@@ -188,7 +190,9 @@ class AudioFileDataset(Dataset):
         # Load in audio here in the Dataset. When the batch size is larger than
         # 1 then the torch dataloader can take advantage of multiprocessing.
         audio_path = self.audio_dir.joinpath(self.filenames[idx])
-        audio, sr = sf.read(str(audio_path), dtype=np.float32)
+        # audio, sr = sf.read(str(audio_path), dtype=np.float32)
+        audio, sr = torchaudio.load(str(audio_path))
+        audio = audio[0].numpy()
         assert sr == self.sample_rate
         return audio, self.filenames[idx]
 
@@ -233,7 +237,7 @@ def save_timestamp_embedding_and_labels(
         json.dump(labels[i], open(f"{out_file}.target-labels.json", "w"), indent=4)
 
 
-def get_labels_for_timestamps(labels: List, timestamps: np.ndarray) -> List:
+def get_labels_for_timestamps(labels: List, timestamps: np.ndarray, mode='default', to_onehot=False, default_label=None) -> List:
     # -> List[List[List[str]]]:
     # -> List[List[str]]:
     # TODO: Is this function redundant?
@@ -242,23 +246,102 @@ def get_labels_for_timestamps(labels: List, timestamps: np.ndarray) -> List:
 
     # NOTE: Make sure dataset events are specified in ms.
     assert len(labels) == len(timestamps)
-    for i, label in enumerate(labels):
-        tree = IntervalTree()
-        # Add all events to the label tree
-        for event in label:
-            # We add 0.0001 so that the end also includes the event
-            tree.addi(event["start"], event["end"] + 0.0001, event["label"])
 
-        labels_for_sound = []
-        # Update the binary vector of labels with intervals for each timestamp
-        for j, t in enumerate(timestamps[i]):
-            interval_labels: List[str] = [interval.data for interval in tree[t]]
-            labels_for_sound.append(interval_labels)
-            # If we want to store the timestamp too
-            # labels_for_sound.append([float(t), interval_labels])
+    if mode == 'default':
+        for i, label in enumerate(labels):
+            tree = IntervalTree()
+            # Add all events to the label tree
+            for event in label:
+                # We add 0.0001 so that the end also includes the event
+                tree.addi(event["start"], event["end"] + 0.0001, event["label"])
 
-        timestamp_labels.append(labels_for_sound)
+            labels_for_sound = []
+            # Update the binary vector of labels with intervals for each timestamp
+            last_label = None 
+            
+            for j, t in enumerate(timestamps[i]):
+                interval_labels: List[str] = [interval.data for interval in tree[t]]
+                # assert len(interval_labels) <= 1
 
+                if to_onehot:
+                    if len(interval_labels) == 0:
+                        interval_labels = [last_label if last_label is not None else default_label]
+                    elif len(interval_labels) > 1:
+                        if last_label is not None and last_label in interval_labels:
+                            interval_labels = [last_label]
+                        else:
+                            interval_labels = [default_label]
+                    last_label = interval_labels[0]
+
+                labels_for_sound.append(interval_labels)
+                # If we want to store the timestamp too
+                # labels_for_sound.append([float(t), interval_labels])
+
+            timestamp_labels.append(labels_for_sound)
+
+    elif mode == 'smoothed':
+        for i, label in enumerate(labels):
+            events_per_label = defaultdict(list)
+            for event in label:
+                events_per_label[event['label']].append(event['start'])
+            
+            values = sorted(values, key=lambda v: v[0])
+            onsets = np.asarray([v[0] for v in values])
+            # for j, v in enumerate(values):
+            #     if len(v[1]) != 2 or type(v[1][0]) != float or type(v[1][1]) != float:
+            #         print("jo")
+            values = np.asarray([v[1] for v in values]).astype(np.float)
+
+            labels_for_sound = []
+            for j, t in enumerate(timestamps[i]):
+                upper_idx = np.searchsorted(onsets, t)
+                if upper_idx == 0:
+                    v = values[0]
+                elif upper_idx == len(values):
+                    v = values[-1]
+                else:
+                    lower = onsets[upper_idx-1]
+                    upper = onsets[upper_idx]
+                    alpha = (t - lower) / (upper - lower)
+                    v = ((1-alpha) * values[upper_idx-1]) + (alpha * values[upper_idx])
+                labels_for_sound.append(v.tolist())
+            timestamp_labels.append(labels_for_sound)
+
+    elif mode == 'continuous':
+        for i, label in enumerate(labels):
+            values = [
+                (event['start'], event['values'])
+                for event in label
+            ]
+            values = sorted(values, key=lambda v: v[0])
+            onsets = np.asarray([v[0] for v in values])
+            # for j, v in enumerate(values):
+            #     if len(v[1]) != 2 or type(v[1][0]) != float or type(v[1][1]) != float:
+            #         print("jo")
+            values = np.asarray([v[1] for v in values]).astype(np.float)
+
+            labels_for_sound = []
+            for j, t in enumerate(timestamps[i]):
+                upper_idx = np.searchsorted(onsets, t)
+                if upper_idx == 0:
+                    v = values[0]
+                elif upper_idx == len(values):
+                    v = values[-1]
+                else:
+                    lower = onsets[upper_idx-1]
+                    upper = onsets[upper_idx]
+                    alpha = (t - lower) / (upper - lower)
+                    v = ((1-alpha) * values[upper_idx-1]) + (alpha * values[upper_idx])
+                labels_for_sound.append(v.tolist())
+            timestamp_labels.append(labels_for_sound)
+            
+    # elif mode == 'probabilities':
+    #     pass
+    #     # TODO
+
+    else:
+        raise "nope"
+    
     assert len(timestamp_labels) == len(timestamps)
     return timestamp_labels
 
@@ -291,7 +374,10 @@ def memmap_embeddings(
             nembeddings += 1
             ndim = emb.shape[0]
             assert emb.dtype == np.float32
-        elif metadata["embedding_type"] == "event":
+        elif (
+            metadata["embedding_type"] == "event" or 
+            metadata["embedding_type"] == "continuous"
+        ):
             assert emb.ndim == 2
             nembeddings += emb.shape[0]
             ndim = emb.shape[1]
@@ -334,7 +420,10 @@ def memmap_embeddings(
 
             labels.append(lbl)
             idx += 1
-        elif metadata["embedding_type"] == "event":
+        elif (
+            metadata["embedding_type"] == "event" or 
+            metadata["embedding_type"] == "continuous"
+        ):
             assert emb.ndim == 2
             embedding_memmap[idx : idx + emb.shape[0]] = emb
             assert emb.shape[0] == len(lbl)
@@ -364,7 +453,10 @@ def memmap_embeddings(
             "wb",
         ),
     )
-    if metadata["embedding_type"] == "event":
+    if (
+        metadata["embedding_type"] == "event" or 
+        metadata["embedding_type"] == "continuous"
+    ):
         assert len(labels) == len(filename_timestamps)
         open(
             embed_task_dir.joinpath(f"{split_name}.filename-timestamps.json"),
@@ -375,7 +467,7 @@ def memmap_embeddings(
 def task_embeddings(
     embedding: Embedding,
     task_path: Path,
-    embed_task_dir: Path,
+    embed_task_dir: Path
 ):
     prng = random.Random()
     prng.seed(0)
@@ -392,7 +484,8 @@ def task_embeddings(
     if not os.path.exists(embed_task_dir):
         os.makedirs(embed_task_dir)
     shutil.copy(metadata_path, embed_task_dir)
-    shutil.copy(label_vocab_path, embed_task_dir)
+    if label_vocab_path.is_file():
+        shutil.copy(label_vocab_path, embed_task_dir)
 
     for split in metadata["splits"]:
         print(f"Getting embeddings for split: {split}")
@@ -446,11 +539,33 @@ def task_embeddings(
                 embeddings = embedding.get_scene_embedding_as_numpy(audios)
                 save_scene_embedding_and_labels(embeddings, labels, filenames, outdir)
 
-            elif metadata["embedding_type"] == "event":
+            elif (
+                metadata["embedding_type"] == "event" or
+                metadata["embedding_type"] == "continuous"
+            ):
                 embeddings, timestamps = embedding.get_timestamp_embedding_as_numpy(
                     audios
                 )
-                labels = get_labels_for_timestamps(labels, timestamps)
+
+                with open(label_vocab_path, 'r') as fp:
+                    label_vocab = list(filter(lambda l: l != '', fp.read().split('\n')))[1:]
+                    label_vocab = [l.split(',') for l in label_vocab]
+                    label_vocab = [(int(l[0]), l[1]) for l in label_vocab]
+
+
+                labeling_mode = (
+                    "continuous"
+                    if metadata["embedding_type"] == "continuous" else
+                    "default"
+                )
+                
+                labels = get_labels_for_timestamps(
+                    labels, 
+                    timestamps, 
+                    mode = labeling_mode,
+                    to_onehot = metadata['prediction_type'] == 'multiclass',
+                    default_label = label_vocab[-1][1]
+                )
                 assert len(labels) == len(filenames)
                 assert len(labels[0]) == len(timestamps[0])
                 save_timestamp_embedding_and_labels(

@@ -93,6 +93,12 @@ def get_logger(task_name: str, log_path: Path) -> logging.Logger:
     help="Shuffle tasks? (Default: False)",
     type=click.BOOL,
 )
+@click.option(
+    "--use-loss-weights",
+    default=True,
+    help="Whether to use the provided loss weights",
+    type=click.BOOL,
+)
 def runner(
     task_dirs: List[str],
     grid_points: int = 8,
@@ -101,6 +107,7 @@ def runner(
     deterministic: bool = True,
     grid: str = "default",
     shuffle: bool = False,
+    use_loss_weights: bool = True,
 ) -> None:
     if gpus is not None:
         gpus = json.loads(gpus)
@@ -137,6 +144,14 @@ def runner(
         start = time.time()
         gpu_max_mem.reset()
 
+
+        # TOMSEN
+        if use_loss_weights and 'label_loss_weights' in metadata:
+            label_loss_weights = torch.tensor(metadata['label_loss_weights']).float()
+        else:
+            label_loss_weights = None
+        
+
         task_predictions(
             embedding_path=task_path,
             embedding_size=embedding_size,
@@ -146,6 +161,7 @@ def runner(
             deterministic=deterministic,
             grid=grid,
             logger=logger,
+            label_loss_weights=label_loss_weights
         )
         sys.stdout.flush()
         gpu_max_mem_used = gpu_max_mem.measure()
@@ -179,3 +195,7 @@ def runner(
 
 if __name__ == "__main__":
     runner()
+    # runner(
+    #     ["/home/tommi/projects/muzik/eval/hear/embeddings/hear_mae.mel80__4x16__768_12_384_4-audio-sr=22050/salami-function-10/"],
+    #     in_memory=False
+    # )

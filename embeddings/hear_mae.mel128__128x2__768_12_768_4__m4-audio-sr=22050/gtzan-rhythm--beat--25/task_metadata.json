@@ -1,0 +1,45 @@
+{
+ "task_name": "gtzan_rythm",
+ "version": "1.0.0",
+ "embedding_type": "event",
+ "prediction_type": "multilabel",
+ "split_mode": "new_split_kfold",
+ "nfolds": 5,
+ "sample_duration": 30.0,
+ "evaluation": [
+  "event_onset_70ms_fms"
+ ],
+ "use_scoring_for_early_stopping": true,
+ "evaluation_params": {
+  "task_specific_param_grid": {
+   "max_epochs": [
+    40
+   ],
+   "check_val_every_n_epoch": [
+    10
+   ]
+  },
+  "event_postprocessing_grid": {
+   "median_filter_ms": [
+    50,
+    100,
+    150
+   ],
+   "min_duration": [
+    25,
+    50,
+    75
+   ]
+  }
+ },
+ "default_mode": "full",
+ "mode": "full",
+ "max_task_duration_by_fold": null,
+ "splits": [
+  "fold00",
+  "fold01",
+  "fold02",
+  "fold03",
+  "fold04"
+ ]
+}
