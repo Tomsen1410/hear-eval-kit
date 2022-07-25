@@ -102,12 +102,6 @@ def get_logger(task_name: str, log_path: Path) -> logging.Logger:
     help="Whether to use the provided loss weights",
     type=click.BOOL,
 )
-@click.option(
-    "--store-model-data",
-    default=True,
-    help="Whether to use the provided loss weights",
-    type=click.BOOL,
-)
 def runner(
     task_dirs: List[str],
     grid_points: int = 8,
@@ -117,8 +111,8 @@ def runner(
     grid: str = "default",
     shuffle: bool = False,
     use_loss_weights: bool = True,
-    extract_non_embedding_data: bool = False,
-    non_embedding_data_path: str = None
+    # extract_non_embedding_data: bool = False,
+    # non_embedding_data_path: str = None
 ) -> None:
     if gpus is not None:
         gpus = json.loads(gpus)
@@ -203,25 +197,25 @@ def runner(
             )
         )
 
-    if extract_non_embedding_data:
-        to_copy = []
-        listed = os.listdir(str(task_path))
-        for f in listed:
-            f = Path(task_path.joinpath(f))
-            if f.is_file():
-                parts = f.name.split(".")
-                if parts[-2] != 'embeddings' and parts[-1] != 'npy':
-                    to_copy.append(f)
+    # if extract_non_embedding_data:
+    #     to_copy = []
+    #     listed = os.listdir(str(task_path))
+    #     for f in listed:
+    #         f = Path(task_path.joinpath(f))
+    #         if f.is_file():
+    #             parts = f.name.split(".")
+    #             if parts[-2] != 'embeddings' and parts[-1] != 'npy':
+    #                 to_copy.append(f)
         
-        if non_embedding_data_path != None:
-            extract_path = Path(non_embedding_data_path)
-        else:
-            extract_path = task_path.joinpath('non_emb_data/')
+    #     if non_embedding_data_path != None:
+    #         extract_path = Path(non_embedding_data_path)
+    #     else:
+    #         extract_path = task_path.joinpath('non_emb_data/')
 
-        extract_path.mkdir(parents=True, exist_ok=True)
+    #     extract_path.mkdir(parents=True, exist_ok=True)
 
-        for f in to_copy:
-            shutil.copy(str(f), str(extract_path.joinpath(f.name)))
+    #     for f in to_copy:
+    #         shutil.copy(str(f), str(extract_path.joinpath(f.name)))
 
 
 
