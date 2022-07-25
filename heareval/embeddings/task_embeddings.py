@@ -346,34 +346,6 @@ def get_labels_for_timestamps(labels: List, timestamps: np.ndarray, mode='defaul
 
             timestamp_labels.append(labels_for_sound)
 
-    elif mode == 'smoothed':
-        for i, label in enumerate(labels):
-            events_per_label = defaultdict(list)
-            for event in label:
-                events_per_label[event['label']].append(event['start'])
-            
-            values = sorted(values, key=lambda v: v[0])
-            onsets = np.asarray([v[0] for v in values])
-            # for j, v in enumerate(values):
-            #     if len(v[1]) != 2 or type(v[1][0]) != float or type(v[1][1]) != float:
-            #         print("jo")
-            values = np.asarray([v[1] for v in values]).astype(np.float)
-
-            labels_for_sound = []
-            for j, t in enumerate(timestamps[i]):
-                upper_idx = np.searchsorted(onsets, t)
-                if upper_idx == 0:
-                    v = values[0]
-                elif upper_idx == len(values):
-                    v = values[-1]
-                else:
-                    lower = onsets[upper_idx-1]
-                    upper = onsets[upper_idx]
-                    alpha = (t - lower) / (upper - lower)
-                    v = ((1-alpha) * values[upper_idx-1]) + (alpha * values[upper_idx])
-                labels_for_sound.append(v.tolist())
-            timestamp_labels.append(labels_for_sound)
-
     elif mode == 'continuous':
         for i, label in enumerate(labels):
             values = [
@@ -401,10 +373,6 @@ def get_labels_for_timestamps(labels: List, timestamps: np.ndarray, mode='defaul
                     v = ((1-alpha) * values[upper_idx-1]) + (alpha * values[upper_idx])
                 labels_for_sound.append(v.tolist())
             timestamp_labels.append(labels_for_sound)
-            
-    # elif mode == 'probabilities':
-    #     pass
-    #     # TODO
 
     else:
         raise "nope"
@@ -567,6 +535,8 @@ def task_embeddings(
     if create_label_loss_weights:
         total_count = 0
         label_count = defaultdict(int)
+
+    if label_vocab_path.is_file():
         with open(label_vocab_path, 'r') as fp:
             label_vocab = list(filter(lambda l: l != '', fp.read().split('\n')))[1:]
             label_vocab = [l.split(',') for l in label_vocab]
@@ -644,7 +614,11 @@ def task_embeddings(
                     timestamps, 
                     mode = labeling_mode,
                     to_onehot = metadata['prediction_type'] == 'multiclass',
-                    default_label = label_vocab[-1][1]
+                    default_label = (
+                        label_vocab[-1][1] 
+                        if metadata['prediction_type'] == 'multiclass' else 
+                        None
+                    )
                 )
 
                 # try:
