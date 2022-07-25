@@ -199,13 +199,13 @@ class AudioFileDataset(Dataset):
         # Load in audio here in the Dataset. When the batch size is larger than
         # 1 then the torch dataloader can take advantage of multiprocessing.
         audio_path = self.audio_dir.joinpath(self.filenames[idx])
-        # audio, sr = sf.read(str(audio_path), dtype=np.float32)
         if audio_path.suffix == '.mp3':
             audio, sr = self.read_mp3_file(str(audio_path))
             audio = audio[0]
         else:
-            audio, sr = torchaudio.load(str(audio_path))
-            audio = audio[0].numpy()
+            audio, sr = sf.read(str(audio_path), dtype=np.float32)
+            # audio, sr = torchaudio.load(str(audio_path))
+            # audio = audio[0].numpy()
         assert sr == self.sample_rate
         return audio, self.filenames[idx]
 
@@ -534,7 +534,8 @@ def memmap_embeddings(
 def task_embeddings(
     embedding: Embedding,
     task_path: Path,
-    embed_task_dir: Path
+    embed_task_dir: Path,
+    create_label_loss_weights: bool = True
 ):
     prng = random.Random()
     prng.seed(0)
@@ -553,6 +554,24 @@ def task_embeddings(
     shutil.copy(metadata_path, embed_task_dir)
     if label_vocab_path.is_file():
         shutil.copy(label_vocab_path, embed_task_dir)
+
+
+    create_label_loss_weights = (
+        create_label_loss_weights and 
+        ('label_loss_weights' not in metadata) and
+        metadata["embedding_type"] != "continuous" and
+        metadata["prediction_type"] != "regression"
+    )
+
+
+    if create_label_loss_weights:
+        total_count = 0
+        label_count = defaultdict(int)
+        with open(label_vocab_path, 'r') as fp:
+            label_vocab = list(filter(lambda l: l != '', fp.read().split('\n')))[1:]
+            label_vocab = [l.split(',') for l in label_vocab]
+            label_vocab = [(int(l[0]), l[1]) for l in label_vocab]
+    
 
     for split in metadata["splits"]:
         print(f"Getting embeddings for split: {split}")
@@ -614,12 +633,6 @@ def task_embeddings(
                     audios
                 )
 
-                with open(label_vocab_path, 'r') as fp:
-                    label_vocab = list(filter(lambda l: l != '', fp.read().split('\n')))[1:]
-                    label_vocab = [l.split(',') for l in label_vocab]
-                    label_vocab = [(int(l[0]), l[1]) for l in label_vocab]
-
-
                 labeling_mode = (
                     "continuous"
                     if metadata["embedding_type"] == "continuous" else
@@ -633,6 +646,19 @@ def task_embeddings(
                     to_onehot = metadata['prediction_type'] == 'multiclass',
                     default_label = label_vocab[-1][1]
                 )
+
+                # try:
+                #     for label in labels:
+                #         for lbl in label:
+                #             total_count += 1
+                #             for l in lbl:
+                #                 label_count[l] += 1
+                # except Exception as e:
+                #     print(l)
+                #     raise e
+                # print(list(label_count.keys()))
+                        
+
                 assert len(labels) == len(filenames)
                 assert len(labels[0]) == len(timestamps[0])
                 save_timestamp_embedding_and_labels(
@@ -644,4 +670,38 @@ def task_embeddings(
                     f"Unknown embedding type: {metadata['embedding_type']}"
                 )
 
+            if create_label_loss_weights:
+                for label in labels:
+                    for lbl in label:
+                        total_count += 1
+                        if not isinstance(lbl, (list, tuple)):
+                            label_count[lbl] += 1
+                        else:
+                            for l in lbl:
+                                label_count[l] += 1
+
+
         memmap_embeddings(outdir, prng, metadata, split, embed_task_dir, split_data)
+
+
+    if create_label_loss_weights:
+        label_to_idx = {}
+        for e in label_vocab:
+            label_to_idx[e[1]] = e[0]
+
+        idx_to_label = {}
+        for e in label_vocab:
+            idx_to_label[e[0]] = e[1]
+        
+        label_loss_weights = []
+        for i in range(len(label_count.keys())):
+            label_loss_weights.append(
+                total_count / label_count[idx_to_label[i]]
+            )
+
+        print(f"Created label loss weights: {label_loss_weights}")
+
+        metadata['label_loss_weights'] = label_loss_weights
+
+        with open(embed_task_dir.joinpath('task_metadata.json'), 'w') as fp:
+            json.dump(metadata, fp, indent=1)

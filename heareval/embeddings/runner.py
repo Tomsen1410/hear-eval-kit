@@ -136,9 +136,9 @@ def runner(
 if __name__ == "__main__":
     runner()
     # runner(
-    #     "hear_mae.mel80__4x16__768_12_384_4",
+    #     "hear_mae.mel128__128x2__768_12_768_4__m4",
     #     tasks_dir = '/home/tommi/datasets/hear/tasks/',
-    #     task = 'salami-function-10',
+    #     task = 'nsynth-instrument-weighted',
     #     model = '/home/',
     #     model_options = '{"audio_sr":22050}'
     # )
