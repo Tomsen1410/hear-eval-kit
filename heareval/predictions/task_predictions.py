@@ -322,9 +322,10 @@ class AbstractPredictionModel(pl.LightningModule):
                     "tuple(tuple) or float."
                 )
 
-        self.log(
-            f"{name}_score", end_scores[f"{name}_{str(self.scores[0])}"], logger=True
-        )
+        if len(self.scores) > 0:
+            self.log(
+                f"{name}_score", end_scores[f"{name}_{str(self.scores[0])}"], logger=True
+            )
         for score_name in end_scores:
             self.log(score_name, end_scores[score_name], prog_bar=True, logger=True)
 
