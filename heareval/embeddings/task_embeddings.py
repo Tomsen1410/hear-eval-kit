@@ -535,7 +535,7 @@ def task_embeddings(
     embedding: Embedding,
     task_path: Path,
     embed_task_dir: Path,
-    create_label_loss_weights: bool = True
+    create_label_loss_weights: bool = False
 ):
     prng = random.Random()
     prng.seed(0)
