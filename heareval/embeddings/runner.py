@@ -51,7 +51,7 @@ from heareval.embeddings.task_embeddings import Embedding, task_embeddings
     "--model-options", default="{}", help="A JSON dict of kwargs to pass to load_model"
 )
 @click.option(
-    "--loss-weights", default="{}", help="A JSON dict of kwargs to pass to load_model"
+    "--loss-weights", default=False, type=bool
 )
 def runner(
     module: str,
@@ -98,12 +98,10 @@ def runner(
     for task_path in tqdm(tasks):
         # TODO: Would be good to include the version here
         # https://github.com/hearbenchmark/hear2021-eval-kit/issues/37
-        embed_dir = embeddings_dir_path.joinpath(
-            embedding.name + options_str + 'weighted' if loss_weights else ''
-        )
+        embed_dir = embeddings_dir_path.joinpath(embedding.name + options_str)
 
         task_name = task_path.name
-        embed_task_dir = embed_dir.joinpath(task_name)
+        embed_task_dir = embed_dir.joinpath(task_name + '_weighted' if loss_weights else '')
 
         done_embeddings = embed_task_dir.joinpath(".done.embeddings")
         if os.path.exists(done_embeddings):
