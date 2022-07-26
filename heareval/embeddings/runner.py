@@ -50,6 +50,9 @@ from heareval.embeddings.task_embeddings import Embedding, task_embeddings
 @click.option(
     "--model-options", default="{}", help="A JSON dict of kwargs to pass to load_model"
 )
+@click.option(
+    "--loss-weights", default="{}", help="A JSON dict of kwargs to pass to load_model"
+)
 def runner(
     module: str,
     model: str = None,
@@ -57,6 +60,7 @@ def runner(
     task: str = "tasks",
     embeddings_dir: str = "embeddings",
     model_options: str = "{}",
+    loss_weights = False
 ) -> None:
     model_options_dict = json.loads(model_options)
     if isinstance(model_options_dict, dict):
@@ -109,7 +113,7 @@ def runner(
         start = time.time()
         gpu_max_mem.reset()
 
-        task_embeddings(embedding, task_path, embed_task_dir)
+        task_embeddings(embedding, task_path, embed_task_dir, create_label_loss_weights=loss_weights)
 
         time_elapsed = time.time() - start
         gpu_max_mem_used = gpu_max_mem.measure()
