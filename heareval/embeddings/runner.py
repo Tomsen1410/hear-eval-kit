@@ -101,7 +101,7 @@ def runner(
         embed_dir = embeddings_dir_path.joinpath(embedding.name + options_str)
 
         task_name = task_path.name
-        embed_task_dir = embed_dir.joinpath(task_name + '_weighted' if loss_weights else '')
+        embed_task_dir = embed_dir.joinpath(task_name + ('_weighted' if loss_weights else ''))
 
         done_embeddings = embed_task_dir.joinpath(".done.embeddings")
         if os.path.exists(done_embeddings):
