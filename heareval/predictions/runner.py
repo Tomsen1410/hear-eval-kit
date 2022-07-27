@@ -222,6 +222,6 @@ def runner(
 if __name__ == "__main__":
     runner()
     # runner(
-    #     ["/home/tommi/projects/muzik/eval/hear/embeddings/hear_mae.mel80__4x16__768_12_384_4-audio-sr=22050/salami-function-10/"],
+    #     ["/home/tommi/projects/muzik/eval/hear/embeddings/hear_mae.mel80__4x16__768_12_384_4-audio-sr=22050/nsynth-instrument-weighted/"],
     #     in_memory=False
     # )

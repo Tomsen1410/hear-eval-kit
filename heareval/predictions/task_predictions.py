@@ -137,8 +137,9 @@ class OneHotToCrossEntropyLoss(pl.LightningModule):
         self.loss = torch.nn.CrossEntropyLoss(reduction='none')
         self.cw: torch.Tensor = class_weights
         if self.cw is not None:
-            if len(self.cw.shape) == 1:
-                self.cw = self.cw.unsqueeze(0)
+            self.cw = self.cw.cuda()
+        #     if len(self.cw.shape) == 1:
+        #         self.cw = self.cw.unsqueeze(0)
 
     def forward(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         # One and only one label per class
@@ -150,7 +151,7 @@ class OneHotToCrossEntropyLoss(pl.LightningModule):
         
         # apply optional weights per class and mean
         if self.cw is not None:
-            loss[y == 1] *= self.cw.expand(loss.shape[0], -1)[y == 1].to(loss.device)
+            loss *= torch.gather(self.cw.to(loss.device), 0, y)
         
         # mean and return
         return loss.mean()
